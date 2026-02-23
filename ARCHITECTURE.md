@@ -215,7 +215,160 @@ db.carts.createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 })
 
 ## Задание 8. Выявление и устранение «горячих» шардов
 
-*TODO*
+### 8.1 Ситуация
+
+Коллекция `products` была шардирована по `{category: 1}`. 70% запросов приходится на категорию «Электроника» — все эти товары оказались на одном шарде, который перегружен.
+
+### 8.2 Метрики для отслеживания состояния шардов
+
+#### Распределение данных
+
+```javascript
+db.products.getShardDistribution()
+sh.status()
+```
+
+Если `getShardDistribution()` показывает, что на одном шарде в 2+ раза больше документов — данные распределены неравномерно.
+
+#### Нагрузка на шарды
+
+```javascript
+db.serverStatus().opcounters
+// { insert: N, query: N, update: N, delete: N, ... }
+```
+
+Если на одном шарде `query` в 2+ раза больше, чем на другом — перекос нагрузки.
+
+#### Текущие операции
+
+```javascript
+db.currentOp({ active: true, secs_running: { $gt: 5 } })
+```
+
+Если на одном шарде скапливаются долгие операции — он перегружен.
+
+#### Задержки по шардам (latencyStats)
+
+```javascript
+db.products.aggregate([
+  { $collStats: { latencyStats: { histograms: true } } }
+])
+```
+
+Возвращает latency по reads, writes, commands для каждого шарда.
+
+#### Медленные запросы
+
+```javascript
+db.setProfilingLevel(1, { slowms: 100 })
+db.system.profile.find().sort({ ts: -1 }).limit(5)
+```
+
+Профилирование записывает запросы дольше 100 мс. Если на одном шарде их в разы больше — он перегружен.
+
+#### Состояние балансировщика
+
+```javascript
+sh.getBalancerState()
+db.adminCommand({ balancerCollectionStatus: "mobilnyi_mir.products" })
+```
+
+Если балансировщик отключён или застрял — перекос данных не исправляется автоматически.
+
+#### Сводная таблица метрик
+
+| Метрика | Команда | Горячий шард, если... |
+|---|---|---|
+| Количество документов | `getShardDistribution()` | Разница между шардами > 50% |
+| Количество операций | `serverStatus().opcounters` | Один шард обрабатывает > 2x операций |
+| Latency (p50, p95, p99) | `$collStats: { latencyStats }` | Latency на одном шарде > 2x выше |
+| Текущие операции | `db.currentOp()` | На одном шарде > 2x активных операций |
+| Время ответа | `system.profile` | Один шард > 2x медленнее |
+| CPU / RAM / Disk I/O | Системный мониторинг | CPU > 80% на одном шарде при < 40% на других |
+
+### 8.3 Механизмы перераспределения данных
+
+#### Способ 1: Встроенный балансировщик
+
+Балансировщик автоматически перемещает диапазоны данных между шардами. Но если проблема в самом шард-ключе (все данные одной категории = один диапазон), он не может разделить данные внутри одного значения ключа.
+
+```javascript
+sh.startBalancer()
+sh.getBalancerState()
+
+db.adminCommand({
+  configureCollectionBalancing: "mobilnyi_mir.products",
+  chunkSize: 128
+})
+
+use config
+db.settings.updateOne(
+  { _id: "balancer" },
+  { $set: { activeWindow: { start: "02:00", stop: "06:00" } } },
+  { upsert: true }
+)
+```
+
+Помогает, если перекос возник из-за миграций или роста данных, а не из-за самого шард-ключа.
+
+#### Способ 2: Изменение шард-ключа (reshardCollection)
+
+Если шард-ключ выбран неудачно, нужно его поменять:
+
+```javascript
+db.adminCommand({
+  reshardCollection: "mobilnyi_mir.products",
+  key: { product_id: "hashed" }
+})
+```
+
+Данные перераспределятся по новому ключу `product_id`, и товары одной категории окажутся на разных шардах.
+
+#### Способ 3: Ручное перемещение диапазонов (moveRange)
+
+Если нужно срочно разгрузить шард, можно переместить диапазоны данных вручную. `moveRange` перемещает диапазон с указанной нижней границей шард-ключа на целевой шард:
+
+```javascript
+db.adminCommand({
+  moveRange: "mobilnyi_mir.products",
+  min: { category: "electronics" },
+  toShard: "shard2"
+})
+```
+
+Ограничение: при шард-ключе `{category: 1}` все товары категории «Электроника» имеют одно значение ключа и попадают в один диапазон. Этот диапазон нельзя разбить на части — можно только переместить целиком на другой шард. Это временная мера; для полноценного решения нужен `reshardCollection` (Способ 2).
+
+#### Способ 4: Зонное шардирование для балансировки
+
+Привязка диапазонов шард-ключа к определённым шардам. Применимо к исходному ключу `{category: 1}` (до решардинга на `{product_id: "hashed"}`):
+
+```javascript
+sh.addShardToZone("shard1", "hot")
+sh.addShardToZone("shard2", "hot")
+
+sh.updateZoneKeyRange("mobilnyi_mir.products",
+  { category: "electronics" },
+  { category: "electronics\uffff" },
+  "hot"
+)
+```
+
+После решардинга на `{product_id: "hashed"}` зонные диапазоны задаются по хэшированному значению `product_id` (тип `NumberLong`), что менее практично — в этом случае используйте `reshardCollection` (Способ 2).
+
+### 8.4 Рекомендуемый порядок действий
+
+1. Обнаружить горячий шард через `getShardDistribution()` и `serverStatus().opcounters`
+2. Если проблема в шард-ключе — оценить новый ключ через `analyzeShardKey`, затем выполнить `reshardCollection`
+3. Если нужна срочная разгрузка — переместить диапазоны вручную через `moveRange`
+4. Настроить зонное шардирование для предотвращения повторения
+5. Настроить мониторинг (MongoDB Exporter + Prometheus) с алертами на перекос `opcounters` и `latencyStats` между шардами
+
+```javascript
+db.adminCommand({
+  analyzeShardKey: "mobilnyi_mir.products",
+  key: { product_id: "hashed" }
+})
+```
 
 ---
 
