@@ -11,7 +11,7 @@ docker compose up -d
 ## Инициализация
 
 ```bash
-./scripts/init-sharding.sh
+./scripts/init-repl.sh
 ```
 
 Инициализирует 3 replica set'а (config_rs, shard1_rs, shard2_rs) по 3 ноды в каждом, добавляет шарды в кластер, включает шардирование коллекции `somedb.helloDoc` по hashed `_id`, вставляет 1000 тестовых документов.
@@ -19,7 +19,7 @@ docker compose up -d
 ## Тестирование
 
 ```bash
-./scripts/test-sharding.sh
+./scripts/test-repl.sh
 ```
 
 Выводит общее количество документов и распределение по шардам.
@@ -29,7 +29,7 @@ docker compose up -d
 ## Остановка и очистка
 
 ```bash
-./scripts/delete-sharding.sh
+./scripts/delete-repl.sh
 ```
 
 Останавливает контейнеры и удаляет volumes (`docker compose down -v`).
