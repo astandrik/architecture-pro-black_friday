@@ -39,6 +39,13 @@ rs.initiate({
 EOF
 sleep 3
 
+echo "Waiting for mongos_router to be ready..."
+until docker compose exec -T mongos_router mongosh --port 27017 --quiet --eval "db.adminCommand('ping')" > /dev/null 2>&1; do
+  sleep 2
+  echo "  mongos_router not ready yet, retrying..."
+done
+echo "mongos_router is ready."
+
 docker compose exec -T mongos_router mongosh --port 27017 --quiet <<EOF
 sh.addShard("shard1_rs/shard1-1:27018,shard1-2:27018,shard1-3:27018")
 sh.addShard("shard2_rs/shard2-1:27018,shard2-2:27018,shard2-3:27018")

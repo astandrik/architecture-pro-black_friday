@@ -1,7 +1,6 @@
 name: sharding-repl-cache
 
 services:
-
   configSrv1:
     image: dh-mirror.gitverse.ru/mongo:latest
     container_name: configSrv1
@@ -119,9 +118,8 @@ services:
 
   pymongo_api:
     container_name: pymongo_api
-    build:
-      context: api_app
-      dockerfile: Dockerfile
+    image: kazhem/pymongo_api:1.0.0
+    platform: linux/amd64
     ports:
       - 8080:8080
     depends_on:

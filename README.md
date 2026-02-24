@@ -4,14 +4,14 @@
 
 ## Структура репозитория
 
-| Директория | Описание |
-|---|---|
-| `mongo-sharding/` | Задание 2. MongoDB с шардированием (2 шарда) |
+| Директория             | Описание                                                 |
+| ---------------------- | -------------------------------------------------------- |
+| `mongo-sharding/`      | Задание 2. MongoDB с шардированием (2 шарда)             |
 | `mongo-sharding-repl/` | Задание 3. Шардирование + репликация (по 3 ноды на шард) |
-| `sharding-repl-cache/` | Задание 4. Шардирование + репликация + Redis-кеш |
-| `schemas/` | Задания 1, 5, 6. Схемы draw.io (5 этапов) |
-| `cdn.drawio` | Итоговая схема (задания 1 + 5 + 6) |
-| `ARCHITECTURE.md` | Задания 7–10. Архитектурный документ |
+| `sharding-repl-cache/` | Задание 4. Шардирование + репликация + Redis-кеш         |
+| `schemas/`             | Задания 1, 5, 6. Схемы draw.io (5 этапов)                |
+| `mongodb_final.drawio` | Итоговая схема (задания 1 + 5 + 6)                       |
+| `ARCHITECTURE.md`      | Задания 7–10. Архитектурный документ                     |
 
 ## Запуск финальной версии (sharding-repl-cache)
 
@@ -31,6 +31,7 @@ docker compose up -d
 ```
 
 Скрипт выполняет:
+
 - Инициализацию replica set конфиг-серверов (`config_rs`: configSrv1, configSrv2, configSrv3)
 - Инициализацию replica set шарда 1 (`shard1_rs`: shard1-1, shard1-2, shard1-3)
 - Инициализацию replica set шарда 2 (`shard2_rs`: shard2-1, shard2-2, shard2-3)
@@ -41,6 +42,7 @@ docker compose up -d
 ### 3. Проверка
 
 Откройте http://localhost:8080 — приложение отобразит JSON с информацией:
+
 - Топология MongoDB (`mongo_topology_type: "Sharded"`)
 - Шарды с репликами (`shards`)
 - Количество документов в коллекции (`collections`)
@@ -74,6 +76,8 @@ curl -w "\nВремя: %{time_total}s\n" http://localhost:8080/helloDoc/users
 ```
 
 ## Запуск базовой версии (single-node MongoDB)
+
+В корневой папке.
 
 ```bash
 docker compose up -d
