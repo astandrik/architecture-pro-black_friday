@@ -355,13 +355,14 @@ sh.updateZoneKeyRange("mobilnyi_mir.products",
 
 После решардинга на `{product_id: "hashed"}` зонные диапазоны задаются по хэшированному значению `product_id` (тип `NumberLong`), что менее практично — в этом случае используйте `reshardCollection` (Способ 2).
 
-### 8.4 Рекомендуемый порядок действий
+### 8.4 Обнаружение и порядок действий
 
-1. Обнаружить горячий шард через `getShardDistribution()` и `serverStatus().opcounters`
+MongoDB Exporter + Prometheus собирают метрики из 8.2 с каждого шарда. Grafana отображает дашборд с `opcounters`, `latencyStats` и распределением документов. Alertmanager отправляет алерт дежурному, когда разница `opcounters.query` между шардами превышает 2x или latency p95 на одном шарде > 2x выше остальных. Дежурный инженер получает алерт и действует по следующему плану:
+
+1. Подтвердить горячий шард через `getShardDistribution()` и `serverStatus().opcounters`
 2. Если проблема в шард-ключе — оценить новый ключ через `analyzeShardKey`, затем выполнить `reshardCollection`
 3. Если нужна срочная разгрузка — переместить диапазоны вручную через `moveRange`
 4. Настроить зонное шардирование для предотвращения повторения
-5. Настроить мониторинг (MongoDB Exporter + Prometheus) с алертами на перекос `opcounters` и `latencyStats` между шардами
 
 ```javascript
 db.adminCommand({
@@ -374,7 +375,124 @@ db.adminCommand({
 
 ## Задание 9. Настройка чтения с реплик и консистентность
 
-*TODO*
+### 9.1 Контекст инфраструктуры
+
+Кластер из заданий 3-4: 2 шарда × 3 ноды (1 primary + 2 secondary), `mongos_router`, Redis-кеш (60 сек TTL). Приложение подключается к `mongos_router:27017`, `readPreference` по умолчанию — `primary`.
+
+### 9.2 Сводная таблица операций чтения
+
+| Коллекция | Операция | Read Preference | Read Concern | Допустимый лаг | Чтение с secondary? |
+|---|---|---|---|---|---|
+| `orders` | История заказов клиента | `secondaryPreferred` | `local` | 5-10 сек | ✅ Да |
+| `orders` | Статус конкретного заказа | `primary` | `majority` | 0 | ❌ Только primary |
+| `products` | Каталог (категория + цена) | `secondaryPreferred` | `local` | 5-10 сек | ✅ Да |
+| `products` | Страница товара (описание) | `secondaryPreferred` | `local` | 5-10 сек | ✅ Да |
+| `products` | Остатки (отображение на странице) | `secondaryPreferred` | `local` | 3-5 сек | ✅ Да |
+| `products` | Остатки (при оформлении заказа) | `primary` | `majority` | 0 | ❌ Только primary |
+| `carts` | Получение активной корзины | `primary` | `majority` | 0 | ❌ Только primary |
+| `carts` | Чтение гостевой корзины при слиянии | `primary` | `majority` | 0 | ❌ Только primary |
+
+### 9.3 Коллекция `orders`
+
+**История заказов клиента → `secondaryPreferred`.** Данные заказов после создания меняются редко. Targeted query по шард-ключу `{customer_id: "hashed"}` идёт на один шард — secondary этого шарда обслуживает запрос, разгружая primary при пиках.
+
+**Статус конкретного заказа → `primary`.** Пользователь ожидает видеть актуальный статус сразу после оплаты; stale read может спровоцировать повторную оплату. `readConcern: "majority"` защищает от rollback при failover.
+
+### 9.4 Коллекция `products`
+
+**Каталог (категория + цена) → `secondaryPreferred`.** Описания и цены обновляются редко. Scatter-gather по шардам — чтение с secondary каждого шарда распределяет нагрузку при пиках.
+
+**Страница товара → `secondaryPreferred`.** Targeted query по шард-ключу `product_id`, данные статичны.
+
+**Остатки (отображение) → `secondaryPreferred`.** На странице показываются приблизительно («в наличии» / «мало»). Точная проверка — при checkout на primary.
+
+**Остатки (checkout) → `primary`.** Stale read → overselling (продажа несуществующего товара). `readConcern: "majority"` гарантирует, что значение не будет откачено.
+
+### 9.5 Коллекция `carts`
+
+**Активная корзина → `primary`.** Корзина модифицируется при каждом действии; stale read → дубли товаров. Корзин мало (TTL), нагрузка на primary допустима.
+
+**Чтение при слиянии → `primary`.** Read-modify-write операция; stale read → потеря товаров, добавленных перед логином. Выполняется редко.
+
+### 9.6 Допустимая задержка репликации
+
+#### Фактическая задержка
+
+В здоровом кластере с 3 нодами на шард задержка репликации обычно **< 1-2 секунды**.
+
+#### maxStalenessSeconds
+
+Минимальное значение для шардированных кластеров — **90 секунд**. Защищает от чтения с сильно отставших реплик (сетевые проблемы, долгая синхронизация). Если secondary отстала > 90 сек, чтение перенаправляется на primary. Задаётся через connection string:
+
+```
+?readPreference=secondaryPreferred&maxStalenessSeconds=90
+```
+
+#### Сводная таблица задержек
+
+| Операция | Бизнес-допустимость | maxStalenessSeconds | readConcern | Комментарий |
+|---|---|---|---|---|
+| История заказов | 5-10 сек | 90 | `local` | Фактический лаг < 2 сек; 90 — защита от деградации |
+| Каталог | 5-10 сек | 90 | `local` | Данные каталога обновляются редко |
+| Страница товара | 5-10 сек | 90 | `local` | Описания неизменны |
+| Остатки (отображение) | 3-5 сек | 90 | `local` | Приблизительные; точная проверка при checkout |
+| Статус заказа | 0 | — | `majority` | Критичен для UX и бизнес-процессов |
+| Остатки (checkout) | 0 | — | `majority` | Overselling = прямые убытки |
+| Корзина (чтение) | 0 | — | `majority` | Активно модифицируемый объект |
+| Корзина (слияние) | 0 | — | `majority` | Read-modify-write; потеря данных при stale read |
+
+### 9.7 Примеры конфигурации
+
+#### Connection string приложения (PyMongo / Motor)
+
+```
+mongodb://mongos_router:27017/?readPreference=secondaryPreferred&maxStalenessSeconds=90&readConcernLevel=local
+```
+
+Задаёт `secondaryPreferred` + `maxStalenessSeconds=90` + `readConcern=local` по умолчанию. Операции, требующие `primary`, переопределяют readPreference на уровне запроса через API драйвера. Параметры `maxStalenessSeconds` и `readConcernLevel` поддерживаются в connection string драйверов, но не в `mongosh` ([документация](https://www.mongodb.com/docs/manual/reference/connection-string-options/)).
+
+#### Per-query override в MongoDB Shell
+
+`cursor.readPref()` в MongoDB Shell принимает только `mode` и `tagSet`, без `maxStalenessSeconds` ([документация](https://www.mongodb.com/docs/manual/reference/method/cursor.readPref/)). `maxStalenessSeconds` задаётся через connection string.
+
+```javascript
+// История заказов — secondaryPreferred (maxStalenessSeconds из connection string)
+db.orders.find({ customer_id: "cust_123" }).sort({ order_date: -1 })
+  .readPref("secondaryPreferred")
+  .readConcern("local")
+
+// Статус заказа — override на primary
+db.orders.findOne({ order_id: "ord_456" })
+  .readPref("primary")
+  .readConcern("majority")
+
+// Каталог — secondaryPreferred
+db.products.find({ category: "electronics", price: { $gte: 1000, $lte: 5000 } })
+  .readPref("secondaryPreferred")
+  .readConcern("local")
+
+// Остатки при checkout — override на primary
+db.products.findOne({ product_id: "prod_789" }, { stock: 1 })
+  .readPref("primary")
+  .readConcern("majority")
+
+// Корзина — override на primary
+db.carts.findOne({ user_id: "user_123", status: "active" })
+  .readPref("primary")
+  .readConcern("majority")
+```
+
+### 9.8 Взаимодействие с Redis-кешем
+
+Redis-кеш (из задания 4) дополняет стратегию чтения с реплик:
+
+| Уровень | Механизм | Что разгружает |
+|---|---|---|
+| L1: Redis | Кеш на уровне приложения, TTL 60 сек | Повторные запросы не доходят до MongoDB |
+| L2: Secondary reads | `readPreference: secondaryPreferred` | Разгружает primary внутри каждого шарда |
+| L3: Primary | `readPreference: primary` | Используется только для критичных операций |
+
+Для операций с `secondaryPreferred` оба уровня кеша работают совместно: первый запрос идёт на secondary, повторные (в пределах TTL) — из Redis. Для операций с `primary` кеширование не применяется.
 
 ---
 
