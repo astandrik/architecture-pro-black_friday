@@ -526,22 +526,22 @@ Cassandra использует consistent hashing: данные распреде
 
 | Сущность | Масштабируемость | Геораспределённость | Скорость записи | Целостность | Cassandra? |
 |---|---|---|---|---|---|
-| `orders` | Линейный рост при пиках | Да (геозоны) | Высокая при Black Friday | Append-only + статус | Да |
+| `orders` | Линейный рост при пиках | Да (геозоны) | Высокая при Black Friday | Транзакция с `products` при создании | Нет |
 | `carts` | Пропорциональна трафику | Нет | Каждое действие = запись | Short-lived, TTL | Да |
 | `user_sessions` | Пропорциональна трафику | Нет | Создание + heartbeat | Short-lived, TTL | Да |
 | `products` | Растёт медленно | Нет | Частые обновления stock | Строгая при checkout | Нет |
 
 #### Сущности для переноса в Cassandra
 
-**orders.** Основная write-нагрузка при Black Friday. После создания заказ почти не меняется (только статус). Запросы: история по `customer_id`, статус по `order_id`. Без leaderless-репликации запись упирается в один primary.
-
-**carts.** Каждое действие = запись (добавить товар, удалить, изменить количество). TTL 24 часа. Доступ по `user_id`/`session_id`, сложных запросов нет.
+**carts.** Добавление товара, удаление, изменение количества — каждое действие пользователя порождает запись. Корзины живут 24 часа и удаляются автоматически (TTL на уровне строки). Доступ по `user_id` или `session_id`, сложные запросы не требуются. Корзина — самодостаточная сущность: операции с ней не требуют атомарности с другими коллекциями.
 
 **user_sessions.** Высокий объём записей при пике, TTL 1 час, доступ по `session_id`. При потере сессии — повторный вход.
 
 #### Сущности, остающиеся в MongoDB
 
-**products** остаётся в MongoDB. Поиск по категории + диапазон цен требует сканирования нескольких партиций в Cassandra. Обновление остатков (`stock`) требует условных записей и rollback — Cassandra counters этого не поддерживают. При checkout нужна строгая консистентность (`readConcern: "majority"`). MongoDB с `{product_id: "hashed"}` справляется.
+**orders** остаётся в MongoDB. Создание заказа требует атомарного списания остатков из `products.stock` — это одна транзакция в MongoDB (`session.startTransaction()`). Если перенести `orders` в Cassandra, а `products` оставить в MongoDB, возникает распределённая транзакция между двумя СУБД. Cassandra не поддерживает multi-row транзакции, поэтому атомарность «создать заказ + уменьшить остаток» невозможна без дополнительного механизма (Saga-паттерн, 2PC). Saga заменяет ACID-транзакцию на eventual consistency: между шагами «создать заказ» и «списать остаток» система несогласована, и параллельный checkout может продать товар, которого уже нет. MongoDB с хэшированным шардированием по `{customer_id: "hashed"}` (задание 7) справляется с нагрузкой на запись заказов.
+
+**products** остаётся в MongoDB. Поиск товаров по категории и диапазону цен (`WHERE category = X AND price BETWEEN Y AND Z`) плохо ложится на Cassandra: такие запросы требуют сканирования нескольких партиций. Обновление остатков (`stock`) требует условных записей и rollback, а Cassandra counters этого не поддерживают. При оформлении заказа нужна строгая консистентность (`readConcern: "majority"` из задания 9). Кроме того, `orders` и `products` участвуют в одной транзакции (см. выше) — обе коллекции должны находиться в одной СУБД.
 
 ---
 
@@ -549,7 +549,7 @@ Cassandra использует consistent hashing: данные распреде
 
 #### Query-First Design
 
-Модель строится от запросов: один запрос = одна таблица. Заказ, например, хранится и в `orders_by_customer`, и в `orders_by_id` — два разных паттерна доступа, две таблицы.
+Модель строится от запросов: один запрос = одна таблица. Корзина авторизованного пользователя и гостевая корзина — два разных паттерна доступа (по `user_id` и по `session_id`), поэтому две таблицы.
 
 #### Keyspace
 
@@ -566,69 +566,13 @@ WITH replication = {
 #### UDT (User Defined Types)
 
 ```cql
-CREATE TYPE order_item (
-  product_id TEXT,
-  name TEXT,
-  quantity INT,
-  price DECIMAL
-);
-
 CREATE TYPE cart_item (
   product_id TEXT,
   quantity INT
 );
 ```
 
-#### Таблица 1: orders_by_customer
-
-Назначение: история заказов клиента — самый частый read-запрос (задание 7).
-
-```cql
-CREATE TABLE orders_by_customer (
-  customer_id TEXT,
-  order_date TIMESTAMP,
-  order_id TEXT,
-  items LIST<FROZEN<order_item>>,
-  status TEXT,
-  total DECIMAL,
-  geo_zone TEXT,
-  PRIMARY KEY ((customer_id), order_date, order_id)
-) WITH CLUSTERING ORDER BY (order_date DESC, order_id ASC);
-```
-
-| Элемент | Значение | Обоснование |
-|---|---|---|
-| Partition key | `customer_id` | Все заказы одного клиента на одной партиции → targeted query без scatter-gather |
-| Clustering key | `order_date DESC, order_id` | Сортировка по дате (новые первыми); `order_id` обеспечивает уникальность при совпадении дат |
-| Горячие партиции | Маловероятно | Обычный покупатель имеет < 100 заказов; даже power user — < 1000. Размер партиции < 100 КБ |
-| Consistent hashing | При добавлении узла перемещается ~1/N партиций | В MongoDB Range-Based Sharding перераспределялись все данные |
-
-#### Таблица 2: orders_by_id
-
-Назначение: проверка статуса конкретного заказа по `order_id`.
-
-```cql
-CREATE TABLE orders_by_id (
-  order_id TEXT,
-  customer_id TEXT,
-  order_date TIMESTAMP,
-  items LIST<FROZEN<order_item>>,
-  status TEXT,
-  total DECIMAL,
-  geo_zone TEXT,
-  PRIMARY KEY ((order_id))
-);
-```
-
-| Элемент | Значение | Обоснование |
-|---|---|---|
-| Partition key | `order_id` | Прямой O(1) lookup по ID заказа. Каждый заказ = отдельная партиция |
-| Clustering key | Нет | Один заказ = одна строка |
-| Горячие партиции | Нет | Каждый заказ — отдельная партиция; нет накопления |
-
-При создании заказа приложение записывает в обе таблицы.
-
-#### Таблица 3: carts_by_user
+#### Таблица 1: carts_by_user
 
 Назначение: активная корзина авторизованного пользователя.
 
@@ -656,7 +600,7 @@ CREATE TABLE carts_by_user (
 
 В Cassandra корзины разнесены по двум таблицам: `carts_by_user` (partition key = `user_id`, всегда заполнен) и `carts_by_session` (partition key = `session_id`, всегда заполнен). Приложение маршрутизирует запрос: авторизованный → `carts_by_user`, гость → `carts_by_session`. Null-значений в partition key нет.
 
-#### Таблица 4: carts_by_session
+#### Таблица 2: carts_by_session
 
 Назначение: гостевая корзина по `session_id`.
 
@@ -677,7 +621,7 @@ CREATE TABLE carts_by_session (
 | Partition key | `session_id` | Прямой lookup гостевой корзины. Одна сессия = одна корзина |
 | TTL | 86400 сек (24 часа) | Гостевые корзины живут недолго; автоочистка без cron-задач |
 
-#### Таблица 5: user_sessions
+#### Таблица 3: user_sessions
 
 Назначение: хранение пользовательских сессий.
 
@@ -713,8 +657,6 @@ CREATE TABLE user_sessions (
 
 | Таблица | Partition key | Clustering key | TTL | Запрос |
 |---|---|---|---|---|
-| `orders_by_customer` | `customer_id` | `order_date DESC, order_id` | — | История заказов клиента |
-| `orders_by_id` | `order_id` | — | — | Статус заказа |
 | `carts_by_user` | `user_id` | `status, updated_at DESC` | 24h | Корзина авторизованного |
 | `carts_by_session` | `session_id` | — | 24h | Гостевая корзина |
 | `user_sessions` | `session_id` | — | 1h | Lookup сессии |
@@ -735,18 +677,8 @@ CREATE TABLE user_sessions (
 
 | Сущность | Hinted Handoff | Read Repair | Anti-Entropy Repair | CL Write | CL Read |
 |---|---|---|---|---|---|
-| **orders** | Включён | Для `orders_by_customer` | Еженедельно | `QUORUM` | `QUORUM` (статус) / `ONE` (история) |
 | **carts** | Включён | Отключён | Низкий приоритет | `QUORUM` | `QUORUM` |
 | **user_sessions** | Включён | Отключён | Не требуется | `ONE` | `ONE` |
-
-#### Обоснование: orders
-
-Hinted Handoff покрывает типичные сценарии: рестарт узла, кратковременные сетевые сбои. Read Repair включён для `orders_by_customer` — история заказов не критична по latency, дополнительные десятки миллисекунд приемлемы. Для `orders_by_id` (статус) Read Repair отключён — используется `CL=QUORUM` (аналог `readConcern: "majority"` из задания 9). Anti-Entropy Repair еженедельно — страховка от пропущенных hints (expire через 3 часа):
-
-```bash
-nodetool repair mobilnyi_mir orders_by_customer
-nodetool repair mobilnyi_mir orders_by_id
-```
 
 #### Обоснование: carts
 
@@ -761,7 +693,7 @@ Hinted Handoff включён (минимальный overhead). Read Repair и 
 | CL | Поведение (RF=3) | Latency | Доступность | Когда использовать |
 |---|---|---|---|---|
 | `ONE` | Запись/чтение подтверждается 1 репликой | Минимальная | Максимальная (работает при падении 2 из 3 узлов) | `user_sessions` — некритичные данные |
-| `QUORUM` | Запись/чтение подтверждается 2 из 3 реплик | Средняя | Высокая (работает при падении 1 из 3 узлов) | `orders`, `carts` — бизнес-критичные данные |
+| `QUORUM` | Запись/чтение подтверждается 2 из 3 реплик | Средняя | Высокая (работает при падении 1 из 3 узлов) | `carts` — бизнес-критичные данные |
 
 `CL=QUORUM` при RF=3: `W + R > N` → `2 + 2 > 3` → strong consistency.
 
@@ -769,8 +701,6 @@ Hinted Handoff включён (минимальный overhead). Read Repair и 
 
 | Сущность | HH | RR | AER | CL W/R | gc_grace_seconds | Обоснование |
 |---|---|---|---|---|---|---|
-| `orders_by_customer` | Да | Да | Еженедельно | QUORUM / ONE | 864000 (10 дн.) | Критичные, долгоживущие данные; история допускает RR overhead |
-| `orders_by_id` | Да | Нет | Еженедельно | QUORUM / QUORUM | 864000 (10 дн.) | Статус критичен по latency; QUORUM достаточно |
 | `carts_by_user` | Да | Нет | При необходимости | QUORUM / QUORUM | 86400 (1 дн.) | TTL-данные; latency критична |
 | `carts_by_session` | Да | Нет | При необходимости | QUORUM / QUORUM | 86400 (1 дн.) | TTL-данные; latency критична |
 | `user_sessions` | Да | Нет | Нет | ONE / ONE | 7200 (2 ч.) | Некритичные TTL-данные; latency в приоритете |

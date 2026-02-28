@@ -13,38 +13,9 @@ WITH replication = {
 
 USE mobilnyi_mir;
 
-CREATE TYPE IF NOT EXISTS order_item (
-  product_id TEXT,
-  name TEXT,
-  quantity INT,
-  price DECIMAL
-);
-
 CREATE TYPE IF NOT EXISTS cart_item (
   product_id TEXT,
   quantity INT
-);
-
-CREATE TABLE IF NOT EXISTS orders_by_customer (
-  customer_id TEXT,
-  order_date TIMESTAMP,
-  order_id TEXT,
-  items LIST<FROZEN<order_item>>,
-  status TEXT,
-  total DECIMAL,
-  geo_zone TEXT,
-  PRIMARY KEY ((customer_id), order_date, order_id)
-) WITH CLUSTERING ORDER BY (order_date DESC, order_id ASC);
-
-CREATE TABLE IF NOT EXISTS orders_by_id (
-  order_id TEXT,
-  customer_id TEXT,
-  order_date TIMESTAMP,
-  items LIST<FROZEN<order_item>>,
-  status TEXT,
-  total DECIMAL,
-  geo_zone TEXT,
-  PRIMARY KEY ((order_id))
 );
 
 CREATE TABLE IF NOT EXISTS carts_by_user (
