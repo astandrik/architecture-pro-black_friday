@@ -709,7 +709,7 @@ Hinted Handoff включён (минимальный overhead). Read Repair и 
 
 ## Альтернатива: YDB
 
-[YDB](https://ydb.tech/) — open-source (Apache 2.0) распределённая SQL СУБД, разработанная Яндексом. Язык запросов — YQL (диалект SQL). SDK для Python (asyncio), Go, Java и других языков ([документация](https://ydb.tech/docs/en/concepts/)).
+[YDB](https://ydb.tech/) — open-source (Apache 2.0) распределённая SQL СУБД, разработанная Яндексом. Язык запросов — YQL (диалект SQL). SDK для Python (asyncio), Go, Java и других языков ([документация](https://ydb.tech/docs/en/reference/ydb-sdk/)).
 
 ### Применение к «Мобильному миру»
 
