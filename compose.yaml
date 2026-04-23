@@ -7,9 +7,8 @@ services:
 
   pymongo_api:
     container_name: pymongo_api
-    build: 
-      context: api_app
-      dockerfile: Dockerfile
+    image: kazhem/pymongo_api:1.0.0
+    platform: linux/amd64
     depends_on:
       - mongodb1
     ports:
@@ -17,7 +16,6 @@ services:
     environment:
       MONGODB_URL: "mongodb://mongodb1"
       MONGODB_DATABASE_NAME: "somedb"
-
 
 volumes:
   mongodb1_data_container:

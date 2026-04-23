@@ -1,0 +1,40 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 YaBrowser/25.12.0.0 Safari/537.36" version="29.3.6">
+  <diagram name="Page-1" id="-H_mtQnk-PTXWXPvYvuk">
+    <mxGraphModel dx="1452" dy="828" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="5JGljM6WeSCsM7v4R8KY-101" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="pymongo-api" vertex="1">
+          <mxGeometry height="60" width="160" x="695.0588235294117" y="918.4705882352941" as="geometry" />
+        </mxCell>
+        <mxCell id="5JGljM6WeSCsM7v4R8KY-102" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;fillColor=#fff2cc;strokeColor=#d6b656;" value="mongos_router" vertex="1">
+          <mxGeometry height="60" width="160" x="975.0588235294117" y="918.4705882352941" as="geometry" />
+        </mxCell>
+        <mxCell id="5JGljM6WeSCsM7v4R8KY-103" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fontSize=13;fillColor=#e1d5e7;strokeColor=#9673a6;" value="configSrv" vertex="1">
+          <mxGeometry height="80" width="120" x="1255.0588235294117" y="738.4705882352941" as="geometry" />
+        </mxCell>
+        <mxCell id="5JGljM6WeSCsM7v4R8KY-104" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fontSize=13;fillColor=#d5e8d4;strokeColor=#82b366;" value="shard1" vertex="1">
+          <mxGeometry height="80" width="120" x="1255.0588235294117" y="888.4705882352941" as="geometry" />
+        </mxCell>
+        <mxCell id="5JGljM6WeSCsM7v4R8KY-105" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fontSize=13;fillColor=#d5e8d4;strokeColor=#82b366;" value="shard2" vertex="1">
+          <mxGeometry height="80" width="120" x="1255.0588235294117" y="1028.4705882352941" as="geometry" />
+        </mxCell>
+        <mxCell id="5JGljM6WeSCsM7v4R8KY-106" edge="1" parent="1" source="5JGljM6WeSCsM7v4R8KY-101" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="5JGljM6WeSCsM7v4R8KY-102">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="5JGljM6WeSCsM7v4R8KY-107" edge="1" parent="1" source="5JGljM6WeSCsM7v4R8KY-102" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;dashed=1;" target="5JGljM6WeSCsM7v4R8KY-103">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="5JGljM6WeSCsM7v4R8KY-108" edge="1" parent="1" source="5JGljM6WeSCsM7v4R8KY-102" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" target="5JGljM6WeSCsM7v4R8KY-104">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="5JGljM6WeSCsM7v4R8KY-109" edge="1" parent="1" source="5JGljM6WeSCsM7v4R8KY-102" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" target="5JGljM6WeSCsM7v4R8KY-105">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="5JGljM6WeSCsM7v4R8KY-110" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=18;fontStyle=1;" value="Схема 1: Шардирование MongoDB (2 шарда)" vertex="1">
+          <mxGeometry height="40" width="500" x="795.0588235294117" y="628.4705882352941" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
